@@ -1,0 +1,7 @@
+{
+  "name": "Thermal Sentinel Platform",
+  "description": "An agentic heat-risk operations platform that uses FortyGuard's street-level temperature intelligence to help outdoor operations teams identify where heat risk is highest, when conditions may peak, and where attention is needed.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
