@@ -1,97 +1,53 @@
+import { Router } from 'express';
 import { db } from '../../db/index';
 import { alerts } from '../../db/schema';
-import { eq, and } from 'drizzle-orm';
-import { RiskAssessment } from './risk';
+import { eq, desc } from 'drizzle-orm';
 
-export interface SiteInfo {
-  id: string;
-  name: string;
-  city: string;
-  state: string;
-}
+export const alertsRouter = Router();
 
-export interface TempInfo {
-  current: number;
-  max: number;
-}
-
-/**
- * Evaluates real site risk and persists/updates alerts in the database.
- * Rules:
- * - If thermal data or risk assessment is null/unavailable: NO alert generated.
- * - If risk level is High or Critical: Create active alert (or update existing active alert for deduplication).
- * - If risk level is Low or Moderate: Resolve any existing active alerts for this site.
- */
-export async function evaluateSiteForAlert(
-  site: SiteInfo,
-  risk: RiskAssessment | null,
-  temp: TempInfo | null
-) {
-  // If thermal data or risk assessment is unavailable / null, DO NOT create alerts.
-  if (!risk || !temp) {
-    return null;
-  }
-
-  const isHighOrCritical = risk.level === 'High' || risk.level === 'Critical';
-  const severity = risk.level.toUpperCase(); // 'HIGH' | 'CRITICAL'
-
+alertsRouter.get('/', async (req, res) => {
   try {
-    // Query existing active alerts for this site
-    const existingActiveAlerts = await db
-      .select()
-      .from(alerts)
-      .where(and(eq(alerts.siteId, site.id), eq(alerts.status, 'ACTIVE')));
-
-    if (isHighOrCritical) {
-      const message = `${risk.level.toUpperCase()} Heat Risk at ${site.name} (${site.city}, ${site.state}): Peak ${temp.max.toFixed(1)}°C (Score ${risk.score}/100). ${risk.recommendation}`;
-
-      if (existingActiveAlerts.length > 0) {
-        // Deduplicate: update existing active alert rather than creating duplicate row
-        const existing = existingActiveAlerts[0];
-        await db
-          .update(alerts)
-          .set({
-            severity,
-            message,
-            createdAt: Date.now()
-          })
-          .where(eq(alerts.id, existing.id));
-
-        return {
-          ...existing,
-          severity,
-          message,
-          createdAt: Date.now()
-        };
-      } else {
-        // Create new active alert
-        const newAlert = {
-          id: `alert-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          siteId: site.id,
-          severity,
-          message,
-          status: 'ACTIVE' as const,
-          createdAt: Date.now(),
-          resolvedAt: null
-        };
-        await db.insert(alerts).values(newAlert);
-        return newAlert;
-      }
-    } else {
-      // Risk is Low or Moderate. If there are active alerts for this site, resolve them.
-      for (const activeAlert of existingActiveAlerts) {
-        await db
-          .update(alerts)
-          .set({
-            status: 'RESOLVED',
-            resolvedAt: Date.now()
-          })
-          .where(eq(alerts.id, activeAlert.id));
-      }
-      return null;
+    const statusParam = req.query.status as string | undefined;
+    if (statusParam) {
+      const filtered = await db
+        .select()
+        .from(alerts)
+        .where(eq(alerts.status, statusParam))
+        .orderBy(desc(alerts.createdAt));
+      return res.json(filtered);
     }
+    const allAlerts = await db.select().from(alerts).orderBy(desc(alerts.createdAt));
+    res.json(allAlerts);
   } catch (err) {
-    console.error(`Error evaluating alert for site ${site.id}:`, err);
-    return null;
+    console.error('Failed to fetch alerts:', err);
+    res.status(500).json({ error: 'Failed to fetch alerts' });
   }
-}
+});
+
+alertsRouter.post('/:id/resolve', async (req, res) => {
+  try {
+    const alertId = req.params.id;
+    await db
+      .update(alerts)
+      .set({
+        status: 'RESOLVED',
+        resolvedAt: Date.now()
+      })
+      .where(eq(alerts.id, alertId));
+    res.json({ success: true, message: 'Alert resolved successfully' });
+  } catch (err) {
+    console.error('Failed to resolve alert:', err);
+    res.status(500).json({ error: 'Failed to resolve alert' });
+  }
+});
+
+alertsRouter.delete('/:id', async (req, res) => {
+  try {
+    const alertId = req.params.id;
+    await db.delete(alerts).where(eq(alerts.id, alertId));
+    res.json({ success: true, message: 'Alert deleted successfully' });
+  } catch (err) {
+    console.error('Failed to delete alert:', err);
+    res.status(500).json({ error: 'Failed to delete alert' });
+  }
+});
